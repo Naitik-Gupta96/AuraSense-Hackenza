@@ -1,0 +1,105 @@
+import os
+import pandas as pd
+import torch
+import torchaudio
+import urllib.request
+from transformers import Wav2Vec2FeatureExtractor, WavLMModel
+from tqdm import tqdm
+import gc
+
+# 1. SETUP & HARDWARE
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Executing aggressively on: {device}")
+
+# 2. LOAD PRETRAINED WavLM (IN HALF-PRECISION FP16 TO SAVE 50% VRAM)
+print("Loading WavLM Base Plus in FP16...")
+processor = Wav2Vec2FeatureExtractor.from_pretrained("microsoft/wavlm-base-plus")
+# We load the model in fp16 if using CUDA, otherwise fallback to float32
+model_dtype = torch.float16 if device.type == 'cuda' else torch.float32
+model = WavLMModel.from_pretrained("microsoft/wavlm-base-plus", torch_dtype=model_dtype).to(device)
+model.eval()
+
+# 3. DIRECTORIES
+os.makedirs("raw_audio", exist_ok=True)
+os.makedirs("extracted_features", exist_ok=True)
+
+# 4. METADATA
+df = pd.read_csv('Nativity Assessmet Audio Dataset(Training Dataset).csv')
+print(f"Processing {len(df)} files with VRAM protection...")
+
+failed_downloads = []
+CHUNK_LENGTH_SEC = 10  # Max seconds of audio allowed in GPU at once
+CHUNK_SAMPLES = CHUNK_LENGTH_SEC * 16000
+
+for index, row in tqdm(df.iterrows(), total=len(df)):
+    dp_id = row['dp_id']
+    url = row['audio_url']
+    
+    ext = url.split('.')[-1]
+    audio_path = f"raw_audio/{dp_id}.{ext}"
+    tensor_path = f"extracted_features/{dp_id}.pt"
+    
+    if os.path.exists(tensor_path):
+        continue
+        
+    try:
+        if not os.path.exists(audio_path):
+            urllib.request.urlretrieve(url, audio_path)
+            
+        waveform, sample_rate = torchaudio.load(audio_path)
+        
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+            
+        if sample_rate != 16000:
+            resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)
+            waveform = resampler(waveform)
+            
+        waveform = waveform.squeeze() # Shape: [Total_Samples]
+        
+        # --- THE VRAM FIX: CHUNKED PROCESSING ---
+        # Split the massive waveform into safe 10-second slices
+        chunks = torch.split(waveform, CHUNK_SAMPLES)
+        chunk_embeddings = []
+        
+        with torch.no_grad():
+            for chunk in chunks:
+                # If a chunk is ridiculously small (e.g. < 0.1 seconds), skip it
+                if len(chunk) < 1600: 
+                    continue
+                    
+                inputs = processor(chunk, sampling_rate=16000, return_tensors="pt")
+                input_values = inputs.input_values.to(device, dtype=model_dtype)
+                
+                # Forward pass for just this chunk
+                outputs = model(input_values)
+                
+                # Mean pool the chunk and immediately move to CPU RAM
+                hidden_state = outputs.last_hidden_state
+                pooled_chunk = torch.mean(hidden_state, dim=1).squeeze().cpu()
+                
+                chunk_embeddings.append(pooled_chunk)
+                
+                # Delete tensors from GPU instantly
+                del inputs, input_values, outputs, hidden_state
+        
+        # Average all chunk embeddings together to get the final file embedding
+        if len(chunk_embeddings) > 0:
+            final_embedding = torch.stack(chunk_embeddings).mean(dim=0)
+            torch.save(final_embedding, tensor_path)
+        else:
+            print(f"Warning: dp_id {dp_id} audio was completely empty.")
+            
+        # AGGRESSIVE VRAM CLEARING
+        del waveform, chunks, chunk_embeddings
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+        gc.collect()
+        
+    except Exception as e:
+        print(f"\nFailed processing dp_id {dp_id}: {e}")
+        failed_downloads.append(dp_id)
+
+print("\n--- EXTRACTION COMPLETE ---")
+if failed_downloads:
+    print(f"Failed IDs: {failed_downloads}")
