@@ -380,6 +380,89 @@ AuraSense-Hackenza/
 
 ---
 
+
+## 📄 Research Foundations & Core Business Logic
+
+Our approach is grounded in **State-of-the-Art (SOTA)** speech processing research. Each component has a peer-reviewed paper behind it.
+
+### 1. WavLM — Self-Supervised Linguistic Representations
+
+> **Paper:** *WavLM: Large-Scale Self-Supervised Pre-Training for Full Stack Speech Processing* (Microsoft Research, 2022)
+
+**What it learns:** Predicts masked speech segments while ignoring noise — learns universal *linguistic* representations (phonetics, rhythm, prosody).
+
+$$\text{WavLM}(x) = \sum_{i=1}^{L} w_i \cdot \text{TransformerLayer}_i(x)$$
+
+Each of the $L=12$ transformer layers captures progressively higher-level speech features — from raw acoustics (layer 1) to abstract linguistic patterns (layer 12). We use the **last hidden state mean-pooled across time** → 768-D embedding per audio file.
+
+**Why it works for nativity:** Native Arabic speakers have different phoneme transitions, vowel durations, and stress patterns than non-native speakers. WavLM encodes exactly these differences.
+
+---
+
+### 2. ECAPA-TDNN — Speaker Identity Fingerprinting
+
+> **Paper:** *ECAPA-TDNN: Emphasized Channel Attention, Propagation and Aggregation in TDNN Based Speaker Verification* (Ghent University, 2020)
+
+**What it learns:** Identifies *who* is speaking by modeling vocal tract shape, formant structure, and speaking style through Squeeze-and-Excitation (SE) attention blocks.
+
+$$z = \text{AttentiveStatPooling}\big(\text{SE-Res2Block}(\text{TDNN}(x))\big) \in \mathbb{R}^{192}$$
+
+The SE blocks perform channel-wise recalibration — they learn *which frequency bands matter most* for distinguishing speakers.
+
+**Why it complements WavLM:** A non-native speaker may pronounce phonemes correctly (fooling WavLM) but still carry an accent *fingerprint* in their vocal quality (caught by ECAPA). The two models look at fundamentally different aspects of the same audio.
+
+---
+
+### 3. Weighted Late Fusion — Learned Modality Blending
+
+> **Inspired by:** *Lahjati at NADI 2025: An ECAPA-WavLM Fusion with Multi-Stage Optimization* (ACL Anthology, 2025)
+
+The Lahjati paper demonstrated ECAPA-WavLM fusion specifically for **Arabic dialect identification** at the NADI 2025 shared task — the closest published work to our exact problem.
+
+**Our fusion formula:**
+
+$$\text{logits}_{\text{fused}} = \alpha \cdot f_W(\text{WavLM}) + (1 - \alpha) \cdot f_E(\text{ECAPA})$$
+
+where:
+- $f_W$ : WavLM classification head (768 → 32 → 2)
+- $f_E$ : ECAPA classification head (192 → 16 → 2)
+- $\alpha = \sigma(\theta) \approx 0.847$ : learned sigmoid-bounded weight
+
+**Key difference from Lahjati:** They use *early/joint fusion* (concatenate before classifier). We use *late fusion* (separate classifiers, blend decisions). Late fusion prevents the 768-D WavLM from drowning out the 192-D ECAPA in a shared feature space.
+
+---
+
+### 4. Training Loss — Weighted Cross-Entropy with Label Smoothing
+
+$$\mathcal{L} = -\sum_{c=1}^{2} w_c \cdot \tilde{y}_c \cdot \log(\hat{y}_c)$$
+
+where:
+- $w_c$ = inverse-frequency class weight (Non-Native gets ~2.5× higher weight)
+- $\tilde{y}_c = (1 - \epsilon) \cdot y_c + \frac{\epsilon}{C}$ with $\epsilon = 0.1$ (label smoothing)
+- $\hat{y}_c = \text{softmax}(\text{logits}_{\text{fused}})_c$
+
+**Why this combination:**
+- **Class weights** prevent the model from always predicting "Native" (71% majority)
+- **Label smoothing** prevents overconfident predictions on 160 training samples
+- Together they force the model to learn *discriminative features* rather than dataset statistics
+
+---
+
+### 5. Design Rationale Summary
+
+| Decision | Why |
+|----------|-----|
+| Pretrained extractors (WavLM + ECAPA) | Transfer learning from 60,000+ hours — impossible to learn from 160 samples alone |
+| Separate classification heads | Prevents 768-D from drowning 192-D in a shared space |
+| Learned α (not fixed 50/50) | Model discovers WavLM is 5.7× more informative → α ≈ 0.85 |
+| L2 normalization before heads | Puts both modalities on the unit sphere — fair comparison |
+| 27,893 total parameters | Deliberately small classifier to prevent overfitting on 160 samples |
+| AdamW + cosine annealing | Proper weight decay + cyclic LR for escaping local minima |
+| 80/10/10 split (not 80/20) | Separate val (early stopping) from test (honest evaluation) |
+
+---
+
+
 ## 🔧 Environment
 
 | Component | Version |
