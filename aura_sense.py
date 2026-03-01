@@ -71,6 +71,10 @@ from transformers import Wav2Vec2FeatureExtractor, WavLMModel
 from tqdm import tqdm
 import gc
 
+# --- Monkey-patch for torchaudio compatibility (newer versions removed list_audio_backends) ---
+if not hasattr(torchaudio, 'list_audio_backends'):
+    torchaudio.list_audio_backends = lambda: ['soundfile']
+
 # --- Hardware detection: CUDA GPU if available, else CPU ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"[Phase 1A] Executing WavLM extraction on: {device}")

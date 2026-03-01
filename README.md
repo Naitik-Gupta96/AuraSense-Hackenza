@@ -83,6 +83,7 @@ This installs everything the pipeline needs:
 | `pandas` | 2.3.3 | Reading the CSV files |
 | `numpy` | 2.2.6 | Array and tensor operations |
 | `tqdm` | latest | Progress bars during extraction |
+| `soundfile` | ≥0.12.1 | Audio I/O backend required by torchaudio on CPU/macOS |
 
 > ⏱️ **First-time install takes 5–10 minutes** — PyTorch alone is ~2 GB.
 
@@ -286,6 +287,7 @@ Each phase checks whether output files already exist before processing — alrea
 | `FileNotFoundError: Nativity Assessmet...` | CSV file not in same folder as script | Move both CSVs next to `aura_sense.py` |
 | `ModuleNotFoundError: No module named 'torch'` | Dependencies not installed | Run `pip install -r requirements.txt` |
 | `AttributeError: 'torchaudio' has no attribute 'list_audio_backends'` | torchaudio version mismatch | Already fixed by monkey-patch in the code |
+| `RuntimeError: Couldn't find appropriate backend to handle uri` | `soundfile` not installed — torchaudio needs it on CPU/macOS | Run `pip install soundfile` (already in `requirements.txt`) |
 | `FileNotFoundError: fusion_fold0.pth not found` | Ensemble model files missing | Expected — Phase 4 is optional, Phases 1–3 unaffected |
 | Downloads stall or fail | Internet interruption | Re-run — resumes from where it stopped |
 | `RuntimeError: CUDA out of memory` | GPU too small | Code auto-falls back to chunked CPU processing |
@@ -337,26 +339,21 @@ Each phase checks whether output files already exist before processing — alrea
 
 ## 📊 Results
 
-### Single-Model (80/10/10 Split)
+### Training (80/10/10 Split)
 | Split | Accuracy | F1 (macro) |
 |-------|----------|------------|
 | Train | 97.7% | — |
 | Validation | 81.2% | 0.768 |
 | **Test** | **75.0%** | **0.667** |
 
-### 5-Fold CV Ensemble (most reliable metric)
+### Final Submission — submission.csv (40 test samples)
 | Metric | Value |
 |--------|-------|
-| Cross-Validated Accuracy | **93.8%** |
-| How measured | Each of 160 samples evaluated exactly once when held out from training |
-
-### Head-to-Head vs Baseline
-| Metric | v1 Aura (Naive Concat) | AuraSense (Ours) |
-|--------|----------------------|-------------------|
-| Architecture | 960→64→2 single MLP | Weighted Late Fusion |
-| Strategy | Single Model | 6-Model Ensemble |
-| Reported Accuracy | 81.2% | **93.8%** |
-| Improvement | — | **+12.6pp** |
+| Native | 26 (65%) |
+| Non-Native | 14 (35%) |
+| Mean confidence | 0.764 |
+| Min / Max confidence | 0.500 / 0.985 |
+| Learned α | 0.847 → WavLM 84.7%, ECAPA 15.3% |
 
 ---
 
@@ -387,12 +384,13 @@ AuraSense-Hackenza/
 
 | Component | Version |
 |-----------|---------|
-| Python | 3.10.19 |
-| PyTorch | 2.10.0 |
-| torchaudio | 2.10.0 |
-| Transformers | 4.44.0 |
+| Python | 3.9.6+ |
+| PyTorch | 2.8.0+ |
+| torchaudio | 2.8.0+ |
+| Transformers | 4.44.0+ |
 | SpeechBrain | 1.0.3 |
-| scikit-learn | 1.7.2 |
+| scikit-learn | 1.6.1+ |
+| soundfile | 0.12.1+ |
 | Hardware | MacBook Air (Apple Silicon, CPU-only) |
 
 ---
